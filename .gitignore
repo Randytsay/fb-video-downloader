@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# binaries and downloads
+/scripts/*.exe
+/scripts/*.dll
+/scripts/ffmpeg
+/scripts/ffprobe
+/downloads/
+.temp/
+*.log
