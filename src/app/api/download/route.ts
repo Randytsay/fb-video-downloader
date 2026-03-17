@@ -104,74 +104,117 @@ export async function POST(req: NextRequest) {
 
     // ACTION: ANALYZE - Returns a list of available quality URLs
     if (action === "analyze") {
-      const puppeteer = await import("puppeteer-core");
-      const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-      
-      const browser = await puppeteer.default.launch({
-        executablePath: chromePath,
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
-      });
+      const foundUrls = new Map<string, string>();
 
       try {
-        const page = await browser.newPage();
-        await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+        const puppeteer = await import("puppeteer-core");
+        const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
         
-        const cdpCookies = parseCookiesToCDP(cookies.trim());
-        const client = await page.createCDPSession();
-        for (const cookie of cdpCookies) {
-          try { await client.send("Network.setCookie", cookie); } catch (e) {}
-        }
+        if (fs.existsSync(chromePath)) {
+          const browser = await puppeteer.default.launch({
+            executablePath: chromePath,
+            headless: true,
+            args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
+          });
 
-        await client.send("Network.enable");
-        const foundUrls = new Map<string, string>(); // Use Map to avoid duplicates and store label
+          try {
+            const page = await browser.newPage();
+            await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+            
+            const cdpCookies = parseCookiesToCDP(cookies.trim());
+            const client = await page.createCDPSession();
+            for (const cookie of cdpCookies) {
+              try { await client.send("Network.setCookie", cookie); } catch (e) {}
+            }
 
-        client.on("Network.responseReceived", async (params: any) => {
-          const { response, requestId } = params;
-          if (response.url.includes("graphql")) {
-            try {
-              const result = await client.send("Network.getResponseBody", { requestId }) as any;
-              const body = result.body;
-              
-              const hdMatch = body.match(/browser_native_hd_url["\s:]+["']([^"']+)["']/);
-              const sdMatch = body.match(/browser_native_sd_url["\s:]+["']([^"']+)["']/);
-              
-              if (hdMatch) foundUrls.set("HD (高畫質)", hdMatch[1].replace(/\\\//g, "/"));
-              if (sdMatch) foundUrls.set("SD (標準畫質)", sdMatch[1].replace(/\\\//g, "/"));
-            } catch (e) {}
+            await client.send("Network.enable");
+            client.on("Network.responseReceived", async (params: any) => {
+              const { response, requestId } = params;
+              if (response.url.includes("graphql")) {
+                try {
+                  const result = await client.send("Network.getResponseBody", { requestId }) as any;
+                  const body = result.body;
+                  const hdMatch = body.match(/browser_native_hd_url["\s:]+["']([^"']+)["']/);
+                  const sdMatch = body.match(/browser_native_sd_url["\s:]+["']([^"']+)["']/);
+                  if (hdMatch) foundUrls.set("HD (高畫質)", hdMatch[1].replace(/\\\//g, "/"));
+                  if (sdMatch) foundUrls.set("SD (標準畫質)", sdMatch[1].replace(/\\\//g, "/"));
+                } catch (e) {}
+              }
+            });
+
+            await page.goto(url, { waitUntil: "networkidle2", timeout: 20000 });
+            await new Promise(r => setTimeout(r, 3000));
+
+            const html = await page.evaluate(() => document.documentElement.innerHTML);
+            const patterns = [
+              { label: "HD (高畫質)", regex: /"browser_native_hd_url":"(.*?)"/ },
+              { label: "SD (標準畫質)", regex: /"browser_native_sd_url":"(.*?)"/ },
+              { label: "HD (預覽)", regex: /"playable_url_quality_hd":"(.*?)"/ },
+              { label: "SD (預覽)", regex: /"playable_url":"(.*?)"/ },
+            ];
+
+            for (const p of patterns) {
+              const match = html.match(p.regex);
+              if (match && !foundUrls.has(p.label)) {
+                try {
+                  const decoded = JSON.parse(`"${match[1]}"`);
+                  if (decoded.startsWith("http")) foundUrls.set(p.label, decoded);
+                } catch(e) {}
+              }
+            }
+            await browser.close();
+          } catch (e) {
+            if (browser) await browser.close();
           }
-        });
-
-        await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-        await new Promise(r => setTimeout(r, 4000));
-
-        // Final HTML scan for URLs
-        const html = await page.evaluate(() => document.documentElement.innerHTML);
-        const patterns = [
-          { label: "HD (高畫質)", regex: /"browser_native_hd_url":"(.*?)"/ },
-          { label: "SD (標準畫質)", regex: /"browser_native_sd_url":"(.*?)"/ },
-          { label: "HD (選項2)", regex: /"playable_url_quality_hd":"(.*?)"/ },
-          { label: "SD (選項2)", regex: /"playable_url":"(.*?)"/ },
-        ];
-
-        for (const p of patterns) {
-          const match = html.match(p.regex);
-          if (match && !foundUrls.has(p.label)) {
-            try {
-              const decoded = JSON.parse(`"${match[1]}"`);
-              if (decoded.startsWith("http")) foundUrls.set(p.label, decoded);
-            } catch(e) {}
-          }
         }
+      } catch (err) {}
 
-        await browser.close();
-        
-        const formats = Array.from(foundUrls.entries()).map(([label, url]) => ({ label, url }));
-        return NextResponse.json({ formats });
-      } catch (err: any) {
-        if (browser) await browser.close();
-        return NextResponse.json({ error: err.message }, { status: 500 });
+      // FALLBACK: Use yt-dlp to dump formats if Puppeteer found nothing
+      if (foundUrls.size === 0) {
+        try {
+          // Write temporary cookies for yt-dlp
+          const tempDir = os.tmpdir();
+          const cookieFile = path.join(tempDir, `analyze-cookies-${Date.now()}.txt`);
+          let cookieContent = cookies.trim();
+          if (!cookieContent.startsWith("# Netscape")) {
+            const lines = ["# Netscape HTTP Cookie File", ""];
+            const pairs = cookieContent.split(";");
+            for (const p of pairs) {
+              const idx = p.indexOf("=");
+              if (idx === -1) continue;
+              const n = p.substring(0, idx).trim();
+              const v = p.substring(idx + 1).trim();
+              if (n && v) lines.push(`.facebook.com\tTRUE\t/\tTRUE\t${Math.floor(Date.now()/1000)+31536000}\t${n}\t${v}`);
+            }
+            cookieContent = lines.join("\n");
+          }
+          fs.writeFileSync(cookieFile, cookieContent);
+
+          const ytProcess = spawn(ytDlpPath, ["--cookies", cookieFile, "-j", url]);
+          const result = await new Promise<string>((resolve) => {
+            let output = "";
+            ytProcess.stdout?.on("data", (d: any) => output += d.toString());
+            ytProcess.on("close", () => resolve(output));
+          });
+
+          if (fs.existsSync(cookieFile)) fs.unlinkSync(cookieFile);
+
+          if (result) {
+            const data = JSON.parse(result);
+            if (data.url) foundUrls.set("自動最佳選擇 (Direct)", data.url);
+            if (data.formats) {
+              // Extract some distinct formats if available
+              data.formats.filter((f: any) => f.vcodec !== "none" && f.url).forEach((f: any) => {
+                const label = `${f.format_note || f.height + 'p' || 'Video'} (${f.ext})`;
+                if (!foundUrls.has(label)) foundUrls.set(label, f.url);
+              });
+            }
+          }
+        } catch (e) {}
       }
+
+      const formats = Array.from(foundUrls.entries()).map(([label, url]) => ({ label, url }));
+      return NextResponse.json({ formats });
     }
 
     // ACTION: DOWNLOAD - Starts the actual download stream

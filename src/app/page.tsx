@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Download, Monitor, CheckCircle2, AlertCircle } from "lucide-react";
+import { Download, Monitor, CheckCircle2, AlertCircle, Search } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { motion, AnimatePresence } from "framer-motion";
@@ -54,7 +54,7 @@ export default function Home() {
       setErrorMsg("");
       setFormats([]);
       setSelectedFormat(null);
-      setLogs(["正在分析影片資訊..."]);
+      setLogs(["正在分析影片資訊 (使用 Puppeteer + yt-dlp 雙重掃描)..."]);
 
       const res = await fetch("/api/download", {
         method: "POST",
@@ -69,20 +69,20 @@ export default function Home() {
         setFormats(data.formats);
         setSelectedFormat(data.formats[0].url); // Default to first (usually HD)
         setStatus("idle");
-        setLogs(["分析完成，請選擇解析度後下載。"]);
+        setLogs(["分析完成！您可以選擇特定的解析度，或直接點擊下方的全自動下載。"]);
       } else {
-        throw new Error("找不到可用的影片解析度，請確認網址或 Cookies 是否正確。");
+        // Not a fatal error
+        setStatus("idle");
+        setLogs(["分析完成，但未偵測到多種解析度。建議直接點擊「全自動下載」。"]);
       }
     } catch (err: any) {
-      setStatus("error");
-      setErrorMsg(err.message || "分析過程中發生錯誤。");
+      setStatus("idle");
+      setErrorMsg(`分析提示：${err.message || "部分資訊目前無法分析"}。您可以無視此訊息，直接點擊「全自動下載」嘗試。`);
     }
   };
 
-  // Stage 2: Download the selected resolution
+  // Stage 2: Download the selected resolution or fallback to direct URL
   const handleDownload = async () => {
-    if (!selectedFormat) return;
-
     try {
       setStatus("downloading");
       setProgress(0);
@@ -96,7 +96,7 @@ export default function Home() {
           url, 
           cookies: cookies.trim(), 
           action: "download",
-          selectedUrl: selectedFormat 
+          selectedUrl: selectedFormat || url // Use selection if available, else use original URL
         }),
       });
 
@@ -154,44 +154,6 @@ export default function Home() {
     }
   };
 
-  const magicUrlFinderScript = `(function() {
-  const findVideo = () => {
-    const patterns = [
-      /"browser_native_hd_url":"(.*?)"/,
-      /"browser_native_sd_url":"(.*?)"/,
-      /"playable_url":"(.*?)"/,
-      /"playable_url_quality_hd":"(.*?)"/
-    ];
-    let targetUrl = null;
-    const html = document.documentElement.innerHTML;
-    for (const p of patterns) {
-      const match = html.match(p);
-      if (match) {
-        targetUrl = JSON.parse(\`"\${match[1]}"\`);
-        if (targetUrl.startsWith('http')) break;
-      }
-    }
-    if (!targetUrl) {
-      const entries = performance.getEntriesByType("resource");
-      const videoEntry = entries.find(e => (e.name.includes(".mp4") || e.name.includes("video")) && e.name.includes("fbcdn.net"));
-      if (videoEntry) targetUrl = videoEntry.name;
-    }
-    if (targetUrl) {
-      const el = document.createElement('textarea');
-      el.value = targetUrl;
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand('copy');
-      document.body.removeChild(el);
-      alert("成功！已找到並複製影片連結。\\n請貼回下載器的網址欄。");
-      return true;
-    }
-    alert("仍找不到隱藏連結。");
-    return false;
-  };
-  findVideo();
-})();`;
-
   const consoleScript = `(function() {
   const cookies = document.cookie.split('; ');
   const netscape = ['# Netscape HTTP Cookie File', ''];
@@ -215,15 +177,15 @@ export default function Home() {
       <div className="max-w-xl w-full space-y-8">
         {/* Header */}
         <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center p-3 bg-blue-500/10 rounded-2xl mb-4 border border-blue-500/20">
+          <div className="inline-flex items-center justify-center p-3 bg-blue-500/10 rounded-2xl mb-4 border border-blue-500/20 shadow-[0_0_20px_rgba(59,130,246,0.1)]">
             <Download className="w-8 h-8 text-blue-400" />
           </div>
-          <h1 className="text-3xl font-bold tracking-tight">FB 影片下載器</h1>
-          <p className="text-neutral-400">立即從私密社團下載高畫質影片。</p>
+          <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">FB 影片下載器 (Pro)</h1>
+          <p className="text-neutral-400">支援私密影片下載、解析度選擇、自動轉檔 MP4。</p>
         </div>
 
         {/* Main Card */}
-        <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-2xl space-y-6">
+        <div className="bg-neutral-900/50 backdrop-blur-xl border border-neutral-800 rounded-3xl p-6 shadow-2xl space-y-6">
           
           {/* Input Section */}
           <div className="space-y-4">
@@ -233,41 +195,52 @@ export default function Home() {
                 <input
                   id="url"
                   type="url"
-                  placeholder="https://www.facebook.com/groups/..."
+                  placeholder="https://www.facebook.com/..."
                   value={url}
-                  onChange={(e) => setUrl(e.target.value)}
+                  onChange={(e) => {
+                    setUrl(e.target.value);
+                    setFormats([]);
+                    setSelectedFormat(null);
+                  }}
                   disabled={status === "downloading" || status === "analyzing"}
-                  className="flex-1 bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50"
+                  className="flex-1 bg-neutral-950/50 border border-neutral-800 rounded-xl px-4 py-3 text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50"
                 />
                 <button
                   onClick={handleAnalyze}
                   disabled={status === "downloading" || status === "analyzing" || !url.trim()}
-                  className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 px-4 py-2 rounded-xl border border-neutral-700 transition-all disabled:opacity-30 whitespace-nowrap text-sm font-medium"
+                  className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 px-4 py-2 rounded-xl border border-neutral-700 transition-all disabled:opacity-30 whitespace-nowrap text-sm font-medium flex items-center gap-2 group"
                 >
-                  {status === "analyzing" ? "分析中..." : "分析影片"}
+                  <Search className={cn("w-4 h-4 transition-transform", status === "analyzing" && "animate-spin")} />
+                  {status === "analyzing" ? "分析中..." : "分析解析度"}
                 </button>
               </div>
             </div>
 
-            {formats.length > 0 && (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="space-y-2"
-              >
-                <label className="text-sm font-medium text-neutral-300">選擇下載品質</label>
-                <select
-                  value={selectedFormat || ""}
-                  disabled={status === "downloading"}
-                  onChange={(e) => setSelectedFormat(e.target.value)}
-                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50"
+            <AnimatePresence>
+              {formats.length > 0 && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="space-y-2 overflow-hidden"
                 >
-                  {formats.map((f, idx) => (
-                    <option key={idx} value={f.url}>{f.label}</option>
-                  ))}
-                </select>
-              </motion.div>
-            )}
+                  <div className="flex items-center gap-2 mb-1">
+                    <CheckCircle2 className="w-4 h-4 text-green-400" />
+                    <label className="text-sm font-medium text-green-400">已成功解析影片品質：</label>
+                  </div>
+                  <select
+                    value={selectedFormat || ""}
+                    disabled={status === "downloading"}
+                    onChange={(e) => setSelectedFormat(e.target.value)}
+                    className="w-full bg-neutral-950 border border-blue-500/30 rounded-xl px-4 py-3 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    {formats.map((f, idx) => (
+                      <option key={idx} value={f.url}>{f.label}</option>
+                    ))}
+                  </select>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <div className="space-y-3">
               <label htmlFor="cookies" className="text-sm font-medium text-neutral-300 flex items-center justify-between">
@@ -281,7 +254,7 @@ export default function Home() {
                   rel="noopener noreferrer"
                   className="text-xs text-blue-400 hover:underline"
                 >
-                  安裝 Cookie-Editor
+                  安裝擴充功能
                 </a>
               </label>
               <textarea
@@ -291,28 +264,38 @@ export default function Home() {
                 onChange={handleCookieChange}
                 disabled={status === "downloading" || status === "analyzing"}
                 rows={4}
-                className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-neutral-100 placeholder:text-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50 font-mono text-[11px] resize-none"
+                className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl px-4 py-3 text-neutral-100 placeholder:text-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50 font-mono text-[11px] resize-none"
               />
             </div>
           </div>
 
-          <button
-            onClick={handleDownload}
-            disabled={status !== "idle" || !selectedFormat}
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3.5 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
-          >
-            {status === "downloading" ? (
-              <>
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                正在下載中...
-              </>
-            ) : (
-              <>
-                <Download className="w-5 h-5" />
-                開始下載影片
-              </>
+          <div className="space-y-4">
+            <button
+              onClick={handleDownload}
+              disabled={status === "downloading" || status === "analyzing" || !url.trim()}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-lg shadow-blue-500/20 text-lg group"
+            >
+              {status === "downloading" ? (
+                <>
+                  <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  正在處理與下載中...
+                </>
+              ) : (
+                <>
+                  <Download className="w-6 h-6 group-hover:translate-y-0.5 transition-transform" />
+                  {selectedFormat ? "開始下載所選品質" : "全自動直接下載"}
+                </>
+              )}
+            </button>
+            {!selectedFormat && !formats.length && status === "idle" && (
+              <div className="flex items-start gap-2 px-1">
+                <AlertCircle className="w-3.5 h-3.5 text-neutral-500 mt-0.5" />
+                <p className="text-[10px] text-neutral-500 leading-normal">
+                  點擊以上按鈕將交由下載器自動判定。若想自選畫質，請先點擊上方的「分析解析度」。
+                </p>
+              </div>
             )}
-          </button>
+          </div>
 
           {/* Progress & Logs UI */}
           <AnimatePresence mode="popLayout">
@@ -326,30 +309,51 @@ export default function Home() {
                 {status === "downloading" && (
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm font-medium">
-                      <span className="text-neutral-400">下載進度</span>
+                      <span className="text-neutral-400">目前進度</span>
                       <span className="text-blue-400">{progress.toFixed(1)}%</span>
                     </div>
                     <div className="h-2 w-full bg-neutral-950 rounded-full overflow-hidden">
-                      <motion.div className="h-full bg-blue-500" animate={{ width: `${progress}%` }} />
+                      <motion.div 
+                        className="h-full bg-blue-500" 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${progress}%` }} 
+                      />
                     </div>
                   </div>
                 )}
-                <div className="bg-neutral-950 rounded-lg p-3 text-[10px] font-mono text-neutral-500 h-24 overflow-y-auto space-y-1">
-                   {logs.map((log, idx) => <div key={idx} className="truncate select-none">{log}</div>)}
+                
+                <div className="bg-neutral-950/80 rounded-xl p-3 text-[10px] font-mono text-neutral-500 h-24 overflow-y-auto space-y-1 border border-neutral-800/50">
+                   {logs.map((log, idx) => (
+                     <div key={idx} className="truncate select-none opacity-80 hover:opacity-100 transition-opacity">
+                       {log}
+                     </div>
+                   ))}
                 </div>
 
                 {status === "success" && (
-                  <div className="bg-green-500/10 border border-green-500/20 text-green-400 p-4 rounded-xl flex items-start gap-3">
-                    <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
-                    <p className="text-sm">下載完成！檔案已存入「下載」資料夾。</p>
-                  </div>
+                  <motion.div 
+                    initial={{ scale: 0.9 }} animate={{ scale: 1 }}
+                    className="bg-green-500/10 border border-green-500/20 text-green-400 p-4 rounded-2xl flex items-start gap-3"
+                  >
+                    <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">下載完成！🎉</p>
+                      <p className="text-sm opacity-80">檔案已存入您的電腦「下載」資料夾。</p>
+                    </div>
+                  </motion.div>
                 )}
 
                  {status === "error" && (
-                  <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                    <p className="text-sm truncate">{errorMsg}</p>
-                  </div>
+                  <motion.div 
+                    initial={{ scale: 0.9 }} animate={{ scale: 1 }}
+                    className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-2xl flex items-start gap-3"
+                  >
+                    <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                    <div className="overflow-hidden">
+                      <p className="font-semibold">發生錯誤</p>
+                      <p className="text-xs opacity-80 break-words">{errorMsg}</p>
+                    </div>
+                  </motion.div>
                 )}
               </motion.div>
             )}
