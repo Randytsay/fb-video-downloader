@@ -79,372 +79,153 @@ function parseCookiesToCDP(cookieStr: string) {
 export async function POST(req: NextRequest) {
   let tempCookiePath = "";
   try {
-    const { url, cookies } = await req.json();
+    const { url, cookies, action, selectedUrl } = await req.json();
 
     if (!url) {
-      return NextResponse.json(
-        { error: "No URL provided." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No URL provided." }, { status: 400 });
     }
 
     if (!cookies) {
-      return NextResponse.json(
-        { error: "Cookies content is required for private videos." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Cookies content is required." }, { status: 400 });
     }
 
-    const { stream, sendEvent, closeStream } = createSSEStream();
-
-    // Check if URL is a direct video link (CDN link) - skip yt-dlp extraction
-    const isDirectLink = url.includes("fbcdn.net") || url.includes("video_redirect") || (url.includes(".mp4") && !url.includes("facebook.com/"));
-    
-    // Check if URL is a Facebook page URL
-    const isFacebookPage = url.includes("facebook.com") && !isDirectLink;
-
-    // Write cookies to a temporary file for yt-dlp
-    const tempDir = os.tmpdir();
-    tempCookiePath = path.join(tempDir, `fb-cookies-${Date.now()}.txt`);
-    
-    let finalCookies = cookies.trim();
-    if (!finalCookies.startsWith("# Netscape")) {
-      const lines = ["# Netscape HTTP Cookie File", "# http://curl.haxx.se/rfc/cookie_spec.html", "# This is a generated file!  Do not edit.", ""];
-      const pairs = finalCookies.split(";");
-      const now = Math.floor(Date.now() / 1000) + 3600*24*365;
-      
-      for (let p of pairs) {
-        const [name, ...valArr] = p.trim().split("=");
-        const value = valArr.join("=");
-        if (name && value) {
-          lines.push(`.facebook.com\tTRUE\t/\tTRUE\t${now}\t${name}\t${value}`);
-        }
-      }
-      finalCookies = lines.join("\n");
-    }
-    fs.writeFileSync(tempCookiePath, finalCookies);
-
-    const ytDlpPath = path.join(process.cwd(), "scripts", "yt-dlp.exe");
-    const ffmpegPath = path.join(process.cwd(), "scripts");
-    // Change downloads dir to the user's system Downloads folder
+    // Resolve paths for yt-dlp and ffmpeg
+    // @ts-ignore
+    const isElectron = !!process.versions.electron;
+    // @ts-ignore
+    const resourcesPath = isElectron && process.resourcesPath ? process.resourcesPath : process.cwd();
+    const ytDlpPath = path.join(resourcesPath, "scripts", "yt-dlp.exe");
+    const ffmpegPath = path.join(resourcesPath, "scripts");
     const downloadsDir = path.join(os.homedir(), "Downloads");
 
-    // Ensure downloads dir exists
     if (!fs.existsSync(downloadsDir)) {
       fs.mkdirSync(downloadsDir, { recursive: true });
     }
 
-    // Strategy: Try Puppeteer first for Facebook pages, then fall back to yt-dlp
-    if (isFacebookPage) {
-      // Use Puppeteer to find the real video URL
-      sendEvent("log", { message: "Using Puppeteer to extract video URL..." });
+    // ACTION: ANALYZE - Returns a list of available quality URLs
+    if (action === "analyze") {
+      const puppeteer = await import("puppeteer-core");
+      const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
       
-      (async () => {
-        let browser: any = null;
-        try {
-          const puppeteer = await import("puppeteer-core");
-          
-          const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-          
-          sendEvent("log", { message: "Launching Chrome..." });
-          browser = await puppeteer.default.launch({
-            executablePath: chromePath,
-            headless: true,
-            args: [
-              "--no-sandbox",
-              "--disable-setuid-sandbox",
-              "--disable-dev-shm-usage",
-              "--disable-blink-features=AutomationControlled",
-            ],
-          });
+      const browser = await puppeteer.default.launch({
+        executablePath: chromePath,
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
+      });
 
-          const page = await browser.newPage();
-          
-          // Set user agent
-          await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          );
+      try {
+        const page = await browser.newPage();
+        await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+        
+        const cdpCookies = parseCookiesToCDP(cookies.trim());
+        const client = await page.createCDPSession();
+        for (const cookie of cdpCookies) {
+          try { await client.send("Network.setCookie", cookie); } catch (e) {}
+        }
 
-          // Set cookies via CDP
-          sendEvent("log", { message: "Injecting session cookies..." });
-          const cdpCookies = parseCookiesToCDP(cookies.trim());
-          const client = await page.createCDPSession();
-          for (const cookie of cdpCookies) {
+        await client.send("Network.enable");
+        const foundUrls = new Map<string, string>(); // Use Map to avoid duplicates and store label
+
+        client.on("Network.responseReceived", async (params: any) => {
+          const { response, requestId } = params;
+          if (response.url.includes("graphql")) {
             try {
-              await client.send("Network.setCookie", cookie);
-            } catch (e) {
-              // Some cookies may fail, that's ok
-            }
-          }
-
-          // Enable response interception via CDP to catch GraphQL API calls
-          await client.send("Network.enable");
-
-          const videoUrls: string[] = [];
-          
-          client.on("Network.responseReceived", async (params: any) => {
-            const { response, requestId } = params;
-            const resUrl = response.url;
-            
-            // Catch GraphQL responses which contain the video metadata
-            if (resUrl.includes("graphql") || resUrl.includes("api/graphql")) {
-              try {
-                const result = await client.send("Network.getResponseBody", { requestId }) as any;
-                const body = result.body;
-                
-                const patterns = [
-                  /browser_native_hd_url["\s:]+["']([^"']+)["']/g,
-                  /browser_native_sd_url["\s:]+["']([^"']+)["']/g,
-                  /playable_url_quality_hd["\s:]+["']([^"']+)["']/g,
-                  /playable_url["\s:]+["']([^"']+)["']/g,
-                  /"progressive":\[.*?"progressive_url":"([^"]+)"/g,
-                ];
-                
-                for (const p of patterns) {
-                  let match;
-                  while ((match = p.exec(body)) !== null) {
-                    try {
-                      let decoded = match[1].replace(/\\\//g, "/").replace(/\\u0025/g, "%");
-                      // Try JSON decode if it's still escaped
-                      try { decoded = JSON.parse(`"${decoded}"`); } catch(e) {}
-                      if (decoded.startsWith("http")) {
-                        videoUrls.push(decoded);
-                      }
-                    } catch(e) {}
-                  }
-                }
-              } catch (e) {
-                // Some bodies can't be fetched, ignore
-              }
-            }
-            
-            // Also catch direct CDN MP4 requests as a fallback
-            if (resUrl.includes("fbcdn.net") && resUrl.includes("video") && !resUrl.includes(".jpg")) {
-              videoUrls.push(resUrl);
-            }
-          });
-
-          // Navigate to the video page
-          sendEvent("log", { message: "Navigating to Facebook video page..." });
-          sendEvent("progress", { percent: 10 });
-          
-          await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-          sendEvent("progress", { percent: 20 });
-
-          sendEvent("log", { message: "Waiting for video data to load..." });
-          await new Promise(r => setTimeout(r, 5000));
-          
-          // Try clicking play to force video load if needed
-          try {
-            await page.evaluate(() => {
-              const btns = document.querySelectorAll('[role="button"], [aria-label*="Play"], [aria-label*="play"]');
-              btns.forEach((b: any) => { try { b.click(); } catch(e) {} });
-            });
-            await new Promise(r => setTimeout(r, 3000));
-          } catch(e) {}
-
-          // Fallback: final HTML scan
-          const htmlUrls = await page.evaluate(() => {
-            const html = document.documentElement.innerHTML;
-            const results: string[] = [];
-            const patterns = [
-              /"browser_native_hd_url":"(.*?)"/,
-              /"browser_native_sd_url":"(.*?)"/,
-              /"playable_url_quality_hd":"(.*?)"/,
-              /"playable_url":"(.*?)"/,
-              /"progressive_url":"(.*?)"/,
-            ];
-            for (const p of patterns) {
-              const match = html.match(p);
-              if (match) {
-                try {
-                  const decoded = JSON.parse(`"${match[1]}"`);
-                  if (decoded.startsWith("http")) results.push(decoded);
-                } catch(e) {}
-              }
-            }
-            return results;
-          });
-
-          const bestUrl = htmlUrls[0] || videoUrls[0] || null;
-          let foundVideoUrl = "";
-
-          if (bestUrl) {
-            foundVideoUrl = bestUrl;
-            sendEvent("log", { message: `Successfully extracted direct video URL!` });
-          }
-
-          sendEvent("progress", { percent: 30 });
-
-          // If we still haven't found a video, try clicking play and waiting
-          if (!foundVideoUrl) {
-            sendEvent("log", { message: "Trying to trigger video playback..." });
-            try {
-              // Try clicking any video or play button
-              await page.evaluate(() => {
-                const video = document.querySelector("video") as HTMLVideoElement;
-                if (video) video.play();
-                // Click play icon or area
-                const playBtn = document.querySelector('[aria-label="Play"]') || document.querySelector('[data-testid="play_button"]');
-                if (playBtn) (playBtn as HTMLElement).click();
-              });
-              // Wait for network requests
-              await new Promise(resolve => setTimeout(resolve, 5000));
+              const result = await client.send("Network.getResponseBody", { requestId }) as any;
+              const body = result.body;
+              
+              const hdMatch = body.match(/browser_native_hd_url["\s:]+["']([^"']+)["']/);
+              const sdMatch = body.match(/browser_native_sd_url["\s:]+["']([^"']+)["']/);
+              
+              if (hdMatch) foundUrls.set("HD (高畫質)", hdMatch[1].replace(/\\\//g, "/"));
+              if (sdMatch) foundUrls.set("SD (標準畫質)", sdMatch[1].replace(/\\\//g, "/"));
             } catch (e) {}
           }
-
-          sendEvent("progress", { percent: 40 });
-
-          await browser.close();
-          browser = null;
-
-          if (foundVideoUrl) {
-            // Now download using yt-dlp with the direct URL
-            sendEvent("log", { message: `Downloading: ${foundVideoUrl.substring(0, 100)}...` });
-            
-            const ytDlpProcess = spawn(ytDlpPath, [
-              foundVideoUrl,
-              "--ffmpeg-location",
-              ffmpegPath,
-              "-o",
-              path.join(downloadsDir, "fb_video_%(epoch)s.%(ext)s"),
-              "--newline",
-            ]);
-
-            let lastError = "";
-
-            if (ytDlpProcess.stdout) {
-              ytDlpProcess.stdout.on("data", (data) => {
-                const output = data.toString();
-                const progressMatch = output.match(/\[download\]\s+([\d.]+)%/);
-                if (progressMatch) {
-                  const p = parseFloat(progressMatch[1]);
-                  sendEvent("progress", { percent: 40 + p * 0.6 });
-                } else {
-                  sendEvent("log", { message: output.trim() });
-                }
-              });
-            }
-
-            if (ytDlpProcess.stderr) {
-              ytDlpProcess.stderr.on("data", (data) => {
-                lastError = data.toString().trim();
-                sendEvent("log", { message: lastError });
-              });
-            }
-
-            ytDlpProcess.on("close", (code) => {
-              if (tempCookiePath && fs.existsSync(tempCookiePath)) {
-                try { fs.unlinkSync(tempCookiePath); } catch (e) {}
-              }
-              if (code === 0) {
-                sendEvent("complete", { message: "Download finished successfully." });
-              } else {
-                sendEvent("error", { message: lastError || `Download process exited with code ${code}` });
-              }
-              closeStream();
-            });
-          } else {
-            // Fallback: try yt-dlp directly (it might work for some videos)
-            sendEvent("log", { message: "Puppeteer could not find video. Falling back to yt-dlp..." });
-            
-            const ytDlpProcess = spawn(ytDlpPath, [
-              url,
-              "--cookies", tempCookiePath,
-              "--ffmpeg-location", ffmpegPath,
-              "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-              "--merge-output-format", "mp4",
-              "-o", path.join(downloadsDir, "%(title)s.%(ext)s"),
-              "--newline",
-            ]);
-
-            if (ytDlpProcess.stdout) {
-              ytDlpProcess.stdout.on("data", (data) => {
-                const output = data.toString();
-                const progressMatch = output.match(/\[download\]\s+([\d.]+)%/);
-                if (progressMatch) {
-                  sendEvent("progress", { percent: parseFloat(progressMatch[1]) });
-                } else {
-                  sendEvent("log", { message: output.trim() });
-                }
-              });
-            }
-
-            if (ytDlpProcess.stderr) {
-              ytDlpProcess.stderr.on("data", (data) => {
-                sendEvent("log", { message: data.toString().trim() });
-              });
-            }
-
-            ytDlpProcess.on("close", (code) => {
-              if (tempCookiePath && fs.existsSync(tempCookiePath)) {
-                try { fs.unlinkSync(tempCookiePath); } catch (e) {}
-              }
-              if (code === 0) {
-                sendEvent("complete", { message: "Download finished successfully." });
-              } else {
-                sendEvent("error", { message: `Process exited with code ${code}` });
-              }
-              closeStream();
-            });
-          }
-        } catch (err: any) {
-          if (browser) {
-            try { await browser.close(); } catch (e) {}
-          }
-          sendEvent("error", { message: `Puppeteer error: ${err.message}` });
-          closeStream();
-        }
-      })();
-    } else {
-      // Direct link or non-Facebook URL - download directly with yt-dlp
-      sendEvent("log", { message: "Downloading direct video link..." });
-
-      const args = isDirectLink
-        ? [url, "--ffmpeg-location", ffmpegPath, "-o", path.join(downloadsDir, "fb_video_%(epoch)s.%(ext)s"), "--newline"]
-        : [url, "--cookies", tempCookiePath, "--ffmpeg-location", ffmpegPath, "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best", "--merge-output-format", "mp4", "-o", path.join(downloadsDir, "%(title)s.%(ext)s"), "--newline"];
-
-      const ytDlpProcess = spawn(ytDlpPath, args);
-      
-      sendEvent("status", { message: "Starting download process..." });
-
-      if (ytDlpProcess.stdout) {
-        ytDlpProcess.stdout.on("data", (data) => {
-          const output = data.toString();
-          const progressMatch = output.match(/\[download\]\s+([\d.]+)%/);
-          if (progressMatch) {
-            sendEvent("progress", { percent: parseFloat(progressMatch[1]) });
-          } else {
-            sendEvent("log", { message: output.trim() });
-          }
         });
-      }
 
-      if (ytDlpProcess.stderr) {
-        ytDlpProcess.stderr.on("data", (data) => {
-          sendEvent("log", { message: data.toString().trim() });
-        });
-      }
+        await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+        await new Promise(r => setTimeout(r, 4000));
 
-      ytDlpProcess.on("close", (code) => {
-        if (tempCookiePath && fs.existsSync(tempCookiePath)) {
-          try { fs.unlinkSync(tempCookiePath); } catch (e) {}
+        // Final HTML scan for URLs
+        const html = await page.evaluate(() => document.documentElement.innerHTML);
+        const patterns = [
+          { label: "HD (高畫質)", regex: /"browser_native_hd_url":"(.*?)"/ },
+          { label: "SD (標準畫質)", regex: /"browser_native_sd_url":"(.*?)"/ },
+          { label: "HD (選項2)", regex: /"playable_url_quality_hd":"(.*?)"/ },
+          { label: "SD (選項2)", regex: /"playable_url":"(.*?)"/ },
+        ];
+
+        for (const p of patterns) {
+          const match = html.match(p.regex);
+          if (match && !foundUrls.has(p.label)) {
+            try {
+              const decoded = JSON.parse(`"${match[1]}"`);
+              if (decoded.startsWith("http")) foundUrls.set(p.label, decoded);
+            } catch(e) {}
+          }
         }
-        if (code === 0) {
-          sendEvent("complete", { message: "Download finished successfully." });
-        } else {
-          sendEvent("error", { message: `Process exited with code ${code}` });
-        }
-        closeStream();
-      });
+
+        await browser.close();
+        
+        const formats = Array.from(foundUrls.entries()).map(([label, url]) => ({ label, url }));
+        return NextResponse.json({ formats });
+      } catch (err: any) {
+        if (browser) await browser.close();
+        return NextResponse.json({ error: err.message }, { status: 500 });
+      }
     }
 
+    // ACTION: DOWNLOAD - Starts the actual download stream
+    const { stream, sendEvent, closeStream } = createSSEStream();
+    
+    (async () => {
+      try {
+        const targetUrl = selectedUrl || url;
+        const isDirect = targetUrl.includes("fbcdn.net") || targetUrl.includes("video_redirect");
+
+        // Write cookies to temp file
+        const tempDir = os.tmpdir();
+        tempCookiePath = path.join(tempDir, `fb-cookies-${Date.now()}.txt`);
+        let cookieContent = cookies.trim();
+        if (!cookieContent.startsWith("# Netscape")) {
+          const lines = ["# Netscape HTTP Cookie File", ""];
+          cookieContent.split(";").forEach(p => {
+            const [n, ...v] = p.trim().split("=");
+            if (n && v.length) lines.push(`.facebook.com\tTRUE\t/\tTRUE\t${Math.floor(Date.now()/1000)+31536000}\t${n}\t${v.join("=")}`);
+          });
+          cookieContent = lines.join("\n");
+        }
+        fs.writeFileSync(tempCookiePath, cookieContent);
+
+        sendEvent("log", { message: "Starting download..." });
+        
+        const args = isDirect 
+          ? [targetUrl, "--ffmpeg-location", ffmpegPath, "-o", path.join(downloadsDir, "fb_video_%(epoch)s.%(ext)s"), "--newline"]
+          : [targetUrl, "--cookies", tempCookiePath, "--ffmpeg-location", ffmpegPath, "-f", "bestvideo+bestaudio/best", "--merge-output-format", "mp4", "-o", path.join(downloadsDir, "%(title)s.%(ext)s"), "--newline"];
+
+        const ytDlpProcess = spawn(ytDlpPath, args);
+
+        ytDlpProcess.stdout?.on("data", (data) => {
+          const output = data.toString();
+          const pMatch = output.match(/\[download\]\s+([\d.]+)%/);
+          if (pMatch) sendEvent("progress", { percent: parseFloat(pMatch[1]) });
+          else sendEvent("log", { message: output.trim() });
+        });
+
+        ytDlpProcess.on("close", (code) => {
+          if (tempCookiePath && fs.existsSync(tempCookiePath)) fs.unlinkSync(tempCookiePath);
+          if (code === 0) sendEvent("complete", { message: "Download Complete!" });
+          else sendEvent("error", { message: `Process exited with code ${code}` });
+          closeStream();
+        });
+
+      } catch (err: any) {
+        sendEvent("error", { message: err.message });
+        closeStream();
+      }
+    })();
+
     return new NextResponse(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
     });
   } catch (error) {
     console.error("API Error:", error);
