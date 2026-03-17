@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "electron:dev": "cross-env NODE_ENV=development electron .",
+    "dist:clean": "rimraf dist",
     "electron:build": "next build && electron-builder"
   },
   "build": {
@@ -19,22 +20,22 @@
     },
     "win": {
       "target": "nsis",
+      "icon": "public/favicon.ico",
       "verifyUpdateCodeSignature": false
     },
-    "forceCodeSigning": false,
     "nsis": {
       "oneClick": true,
       "allowToChangeInstallationDirectory": false,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "installerIcon": "public/favicon.ico",
+      "uninstallerIcon": "public/favicon.ico"
     },
     "files": [
-      "**/*",
-      "!.next/cache",
-      "!.next/dev",
-      "!node_modules/.cache",
-      "!dist",
-      "!electron",
-      "node_modules/**/*"
+      "!**/*",
+      "electron/**/*",
+      ".next/standalone/**/*",
+      ".next/static/**/*",
+      "public/**/*"
     ],
     "extraResources": [
       {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Download, Monitor, CheckCircle2, AlertCircle, Search } from "lucide-react";
+import { Download, Monitor, CheckCircle2, AlertCircle, Search, FileText } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { motion, AnimatePresence } from "framer-motion";
@@ -10,17 +10,23 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+interface Format {
+  label: string;
+  url: string;
+  formatId?: string;
+}
+
 export default function Home() {
   const [url, setUrl] = useState("");
   const [cookies, setCookies] = useState("");
+  const [filename, setFilename] = useState("");
   const [status, setStatus] = useState<"idle" | "analyzing" | "downloading" | "success" | "error">("idle");
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
-  const [showManual, setShowManual] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [formats, setFormats] = useState<{ label: string; url: string }[]>([]);
-  const [selectedFormat, setSelectedFormat] = useState<string | null>(null);
+  const [formats, setFormats] = useState<Format[]>([]);
+  const [selectedFormat, setSelectedFormat] = useState<Format | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -62,22 +68,53 @@ export default function Home() {
         body: JSON.stringify({ url, cookies: cookies.trim(), action: "analyze" }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "分析失敗");
+      if (!res.ok) throw new Error(await res.text() || "分析失敗");
+      if (!res.body) throw new Error("無法讀取伺服器分析流。");
 
-      if (data.formats && data.formats.length > 0) {
-        setFormats(data.formats);
-        setSelectedFormat(data.formats[0].url); // Default to first (usually HD)
-        setStatus("idle");
-        setLogs(["分析完成！您可以選擇特定的解析度，或直接點擊下方的全自動下載。"]);
-      } else {
-        // Not a fatal error
-        setStatus("idle");
-        setLogs(["分析完成，但未偵測到多種解析度。建議直接點擊「全自動下載」。"]);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let done = false;
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        done = readerDone;
+        if (value) {
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.startsWith("event: log")) {
+              const dataLine = lines[i + 1];
+              if (dataLine && dataLine.startsWith("data: ")) {
+                const data = JSON.parse(dataLine.replace("data: ", ""));
+                setLogs((prev) => [...prev.slice(-49), data.message]);
+              }
+            } else if (line.startsWith("event: analyze_complete")) {
+              const dataLine = lines[i + 1];
+              if (dataLine && dataLine.startsWith("data: ")) {
+                const data = JSON.parse(dataLine.replace("data: ", ""));
+                if (data.formats && data.formats.length > 0) {
+                  setFormats(data.formats);
+                  setSelectedFormat(data.formats[0]);
+                  setLogs((prev) => [...prev.slice(-49), "分析完成！您可以選擇特定的解析度。"]);
+                } else {
+                  setLogs((prev) => [...prev.slice(-49), "分析完成，但未偵測到多種解析度。建議全自動下載。"]);
+                }
+              }
+              setStatus("idle");
+            } else if (line.startsWith("event: error")) {
+              const dataLine = lines[i + 1];
+              if (dataLine && dataLine.startsWith("data: ")) {
+                const data = JSON.parse(dataLine.replace("data: ", ""));
+                throw new Error(data.message);
+              }
+            }
+          }
+        }
       }
     } catch (err: any) {
       setStatus("idle");
-      setErrorMsg(`分析提示：${err.message || "部分資訊目前無法分析"}。您可以無視此訊息，直接點擊「全自動下載」嘗試。`);
+      setErrorMsg(`分析提示：${err.message || "目前無法取得解析度列表"}。您可以直接輸入檔名後點擊「全自動下載」。`);
     }
   };
 
@@ -96,7 +133,9 @@ export default function Home() {
           url, 
           cookies: cookies.trim(), 
           action: "download",
-          selectedUrl: selectedFormat || url // Use selection if available, else use original URL
+          selectedUrl: selectedFormat?.url || url,
+          formatId: selectedFormat?.formatId,
+          customFilename: filename.trim()
         }),
       });
 
@@ -132,7 +171,7 @@ export default function Home() {
                  const dataLine = lines[i + 1];
                  if(dataLine && dataLine.startsWith("data: ")) {
                     const data = JSON.parse(dataLine.replace("data: ", ""));
-                    setLogs((prev) => [...prev.slice(-4), data.message]); // Keep last 5 logs
+                    setLogs((prev) => [...prev.slice(-49), data.message]); // Keep last 50 logs
                  }
                } else if (line.startsWith("event: complete")) {
                  setStatus("success");
@@ -154,23 +193,7 @@ export default function Home() {
     }
   };
 
-  const consoleScript = `(function() {
-  const cookies = document.cookie.split('; ');
-  const netscape = ['# Netscape HTTP Cookie File', ''];
-  const now = Math.floor(Date.now() / 1000) + 3600*24*365;
-  for (const c of cookies) {
-    const [name, value] = c.split('=');
-    netscape.push(\`.facebook.com\\tTRUE\\t/\\tTRUE\\t\${now}\\t\${name}\\t\${value}\`);
-  }
-  const result = netscape.join('\\n');
-  const el = document.createElement('textarea');
-  el.value = result;
-  document.body.appendChild(el);
-  el.select();
-  document.execCommand('copy');
-  document.body.removeChild(el);
-  alert('已複製到剪貼簿！');
-})();`;
+  if (!mounted) return <div className="min-h-screen bg-neutral-950" />;
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-50 flex items-center justify-center p-4 selection:bg-blue-500/30">
@@ -181,7 +204,7 @@ export default function Home() {
             <Download className="w-8 h-8 text-blue-400" />
           </div>
           <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">FB 影片下載器 (Pro)</h1>
-          <p className="text-neutral-400">支援私密影片下載、解析度選擇、自動轉檔 MP4。</p>
+          <p className="text-neutral-400">支援私密影片下載、品質自選、影音同步對齊。</p>
         </div>
 
         {/* Main Card */}
@@ -222,25 +245,47 @@ export default function Home() {
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
                   exit={{ opacity: 0, height: 0 }}
-                  className="space-y-2 overflow-hidden"
+                  className="space-y-4 overflow-hidden"
                 >
-                  <div className="flex items-center gap-2 mb-1">
-                    <CheckCircle2 className="w-4 h-4 text-green-400" />
-                    <label className="text-sm font-medium text-green-400">已成功解析影片品質：</label>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      <CheckCircle2 className="w-4 h-4 text-green-400" />
+                      <label className="text-sm font-medium text-green-400">請選擇影片畫質 (DASH 已支援音訊合併)：</label>
+                    </div>
+                    <select
+                      value={selectedFormat?.url || ""}
+                      disabled={status === "downloading"}
+                      onChange={(e) => {
+                        const fmt = formats.find(f => f.url === e.target.value);
+                        if (fmt) setSelectedFormat(fmt);
+                      }}
+                      className="w-full bg-neutral-950 border border-blue-500/30 rounded-xl px-4 py-3 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      {formats.map((f, idx) => (
+                        <option key={idx} value={f.url}>{f.label}</option>
+                      ))}
+                    </select>
                   </div>
-                  <select
-                    value={selectedFormat || ""}
-                    disabled={status === "downloading"}
-                    onChange={(e) => setSelectedFormat(e.target.value)}
-                    className="w-full bg-neutral-950 border border-blue-500/30 rounded-xl px-4 py-3 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50 cursor-pointer"
-                  >
-                    {formats.map((f, idx) => (
-                      <option key={idx} value={f.url}>{f.label}</option>
-                    ))}
-                  </select>
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {/* Filename Input */}
+            <div className="space-y-2">
+              <label htmlFor="filename" className="text-sm font-medium text-neutral-300 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-indigo-400" />
+                存檔名稱 (選填)
+              </label>
+              <input
+                id="filename"
+                type="text"
+                placeholder="我的影片 (不需輸入副檔名)"
+                value={filename}
+                onChange={(e) => setFilename(e.target.value)}
+                disabled={status === "downloading" || status === "analyzing"}
+                className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl px-4 py-3 text-neutral-100 placeholder:text-neutral-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all disabled:opacity-50"
+              />
+            </div>
 
             <div className="space-y-3">
               <label htmlFor="cookies" className="text-sm font-medium text-neutral-300 flex items-center justify-between">
@@ -278,7 +323,7 @@ export default function Home() {
               {status === "downloading" ? (
                 <>
                   <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  正在處理與下載中...
+                  正在努力下載與合併中...
                 </>
               ) : (
                 <>
@@ -291,7 +336,7 @@ export default function Home() {
               <div className="flex items-start gap-2 px-1">
                 <AlertCircle className="w-3.5 h-3.5 text-neutral-500 mt-0.5" />
                 <p className="text-[10px] text-neutral-500 leading-normal">
-                  點擊以上按鈕將交由下載器自動判定。若想自選畫質，請先點擊上方的「分析解析度」。
+                  提示：您可以先「分析解析度」來選擇畫質並指定檔名，或直接全自動下載。
                 </p>
               </div>
             )}
@@ -309,7 +354,7 @@ export default function Home() {
                 {status === "downloading" && (
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm font-medium">
-                      <span className="text-neutral-400">目前進度</span>
+                      <span className="text-neutral-400">處理進度 (含合併時間)</span>
                       <span className="text-blue-400">{progress.toFixed(1)}%</span>
                     </div>
                     <div className="h-2 w-full bg-neutral-950 rounded-full overflow-hidden">
@@ -317,14 +362,15 @@ export default function Home() {
                         className="h-full bg-blue-500" 
                         initial={{ width: 0 }}
                         animate={{ width: `${progress}%` }} 
+                        transition={{ duration: 0.5 }}
                       />
                     </div>
                   </div>
                 )}
                 
-                <div className="bg-neutral-950/80 rounded-xl p-3 text-[10px] font-mono text-neutral-500 h-24 overflow-y-auto space-y-1 border border-neutral-800/50">
+                <div className="bg-neutral-950/80 rounded-xl p-3 text-[10px] font-mono text-neutral-500 h-32 overflow-y-auto space-y-1 border border-neutral-800/50">
                    {logs.map((log, idx) => (
-                     <div key={idx} className="truncate select-none opacity-80 hover:opacity-100 transition-opacity">
+                     <div key={idx} className="break-words select-all opacity-80 hover:opacity-100 transition-opacity">
                        {log}
                      </div>
                    ))}
@@ -332,20 +378,20 @@ export default function Home() {
 
                 {status === "success" && (
                   <motion.div 
-                    initial={{ scale: 0.9 }} animate={{ scale: 1 }}
+                    initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
                     className="bg-green-500/10 border border-green-500/20 text-green-400 p-4 rounded-2xl flex items-start gap-3"
                   >
                     <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="font-semibold">下載完成！🎉</p>
-                      <p className="text-sm opacity-80">檔案已存入您的電腦「下載」資料夾。</p>
+                      <p className="text-sm opacity-80">您的檔案已成功儲存至「下載」資料夾。</p>
                     </div>
                   </motion.div>
                 )}
 
                  {status === "error" && (
                   <motion.div 
-                    initial={{ scale: 0.9 }} animate={{ scale: 1 }}
+                    initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
                     className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-2xl flex items-start gap-3"
                   >
                     <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
