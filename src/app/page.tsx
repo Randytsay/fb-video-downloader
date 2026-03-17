@@ -123,18 +123,18 @@ export default function Home() {
     const trimmedUrl = url.trim();
     if (!trimmedUrl) {
       setStatus("error");
-      setErrorMsg("Please enter a Facebook video URL.");
+      setErrorMsg("請輸入 Facebook 影片網址。");
       return;
     }
     if (!trimmedUrl.includes("facebook.com") && !trimmedUrl.includes("fbcdn.net") && !trimmedUrl.includes(".mp4")) {
       setStatus("error");
-      setErrorMsg("Please enter a valid Facebook video URL or direct video link.");
+      setErrorMsg("請輸入有效的 Facebook 影片網址或直接影片連結。");
       return;
     }
 
     if (!cookies.trim()) {
       setStatus("error");
-      setErrorMsg("Please provide your cookies content.");
+      setErrorMsg("請提供您的 Cookies 內容。");
       return;
     }
 
@@ -155,7 +155,7 @@ export default function Home() {
       }
 
       if (!res.body) {
-         throw new Error("No response body");
+         throw new Error("無法讀取伺服器回應。");
       }
 
       const reader = res.body.getReader();
@@ -200,7 +200,7 @@ export default function Home() {
 
     } catch (err: any) {
       setStatus("error");
-      setErrorMsg(err.message || "An unexpected error occurred.");
+      setErrorMsg(err.message || "發生非預期錯誤。");
     }
   };
 
@@ -212,8 +212,8 @@ export default function Home() {
           <div className="inline-flex items-center justify-center p-3 bg-blue-500/10 rounded-2xl mb-4 border border-blue-500/20">
             <Download className="w-8 h-8 text-blue-400" />
           </div>
-          <h1 className="text-3xl font-bold tracking-tight">FB Video Downloader</h1>
-          <p className="text-neutral-400">Download high-definition videos from private groups instantly.</p>
+          <h1 className="text-3xl font-bold tracking-tight">FB 影片下載器</h1>
+          <p className="text-neutral-400">立即從私密社團下載高畫質影片。</p>
         </div>
 
         {/* Main Card */}
@@ -222,7 +222,7 @@ export default function Home() {
           {/* Input Section */}
           <div className="space-y-4">
             <div className="space-y-2">
-              <label htmlFor="url" className="text-sm font-medium text-neutral-300">Facebook URL</label>
+              <label htmlFor="url" className="text-sm font-medium text-neutral-300">Facebook 影片網址</label>
               <input
                 id="url"
                 type="url"
@@ -238,7 +238,7 @@ export default function Home() {
               <label htmlFor="cookies" className="text-sm font-medium text-neutral-300 flex items-center justify-between">
                 <span className="flex items-center gap-2">
                   <Monitor className="w-4 h-4 text-blue-400" />
-                  Cookies (Netscape format)
+                  Cookies (Netscape 格式)
                 </span>
                 <a 
                   href="https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhhcgbbmhlhgfogleamhcbg" 
@@ -246,7 +246,7 @@ export default function Home() {
                   rel="noopener noreferrer"
                   className="text-xs text-blue-400 hover:underline flex items-center gap-1"
                 >
-                  Install Cookie-Editor
+                  安裝 Cookie-Editor 擴充功能
                 </a>
               </label>
               
@@ -265,84 +265,85 @@ export default function Home() {
               <div className="flex flex-col gap-2">
                 <div className="bg-blue-500/5 border border-blue-500/10 rounded-xl p-3 space-y-2">
                   <div className="flex justify-between items-center">
-                    <p className="text-[11px] font-medium text-blue-400 whitespace-nowrap">How to get cookies:</p>
+                    <p className="text-[11px] font-medium text-blue-400 whitespace-nowrap">如何取得 Cookies：</p>
                     <button 
                       onClick={() => setShowManual(!showManual)}
                       className="text-[10px] text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
                     >
-                      {showManual ? "Close Manual Guide" : "Can't use extension? (Manual Guide)"}
+                      {showManual ? "關閉手動指南" : "無法使用擴充功能？(手動指南)"}
                     </button>
                   </div>
                   
                   {!showManual ? (
                     <ol className="text-[10px] text-neutral-400 list-decimal list-inside space-y-1">
-                      <li>Open the Facebook video page</li>
-                      <li>Click **Cookie-Editor** icon</li>
-                      <li>Click **Export** &rarr; select **Netscape**</li>
-                      <li>Paste the text into the box above</li>
+                      <li>在瀏覽器打開 Facebook 影片頁面</li>
+                      <li>點擊 **Cookie-Editor** 圖示</li>
+                      <li>點擊 **Export** &rarr; 選擇 **Netscape**</li>
+                      <li>將複製的內容貼到上方輸入框（本系統會自動儲存）</li>
                     </ol>
                   ) : (
                     <div className="space-y-4 pt-1 border-t border-white/5 mt-2">
                       <div className="space-y-1.5">
-                        <p className="text-[11px] font-medium text-neutral-300">Option A: Console Script (Faster)</p>
+                        <p className="text-[11px] font-medium text-neutral-300">方法 A：控制台腳本 (較快)</p>
                         <p className="text-[10px] text-neutral-400 leading-normal">
-                          Press F12 &rarr; Console &rarr; Paste & run script below.
+                          按 F12 &rarr; Console &rarr; 貼上並執行下方腳本。
                         </p>
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(consoleScript);
-                            alert("Script copied! Paste it into your Browser Console (F12).");
+                            alert("腳本已複製！請貼到瀏覽器控制台 (F12 Console) 並按 Enter。");
                           }}
                           className="w-full bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-[10px] py-1.5 rounded-lg border border-blue-500/20 transition-all font-medium"
                         >
-                          Copy Console Script
+                          複製控制台腳本
                         </button>
                       </div>
 
                       <div className="space-y-1.5">
-                        <p className="text-[11px] font-medium text-neutral-300">Option B: Network Tab (FOOLPROOF)</p>
+                        <p className="text-[11px] font-medium text-neutral-300">方法 B：Network 分頁 (最穩)</p>
                         <ol className="text-[10px] text-neutral-400 list-decimal list-inside space-y-1">
-                          <li>Press **F12** &rarr; **Network** tab &rarr; **Refresh** page</li>
-                          <li>Find **Request Headers** &rarr; **Cookie** &rarr; **Copy value**</li>
-                          <li>Paste it into the **Cookies** box above</li>
+                          <li>按 **F12** &rarr; **Network** 分頁 &rarr; **重新整理** 網頁</li>
+                          <li>找到一個名為 `graphql` 的請求 &rarr; 查看 **Request Headers**</li>
+                          <li>找到 **cookie:** 欄位 &rarr; **複製所有內容**</li>
+                          <li>貼到上方的 **Cookies** 輸入框即可</li>
                         </ol>
                       </div>
 
                       <div className="space-y-1.5 pt-2 border-t border-white/5">
-                        <p className="text-[11px] font-medium text-green-400">Option C: Magic URL Finder (Easiest)</p>
+                        <p className="text-[11px] font-medium text-green-400">方法 C：神奇網址搜尋腳本 (備用)</p>
                         <p className="text-[10px] text-neutral-400 leading-normal">
-                          If Option B (Cookies) still fails to download:
+                          如果使用 Cookies 仍下載失敗，可以嘗試直接抓取影片連結：
                         </p>
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(magicUrlFinderScript);
-                            alert("Magic Script copied! Paste it into your Browser Console (F12) while the video is playing.");
+                            alert("神奇腳本已複製！在影片播放時，貼到瀏覽器控制台 (F12 Console) 執行。");
                           }}
                           className="w-full bg-green-500/10 hover:bg-green-500/20 text-green-300 text-[10px] py-1.5 rounded-lg border border-green-500/20 transition-all font-medium"
                         >
-                          Copy Magic Finder Script
+                          複製神奇搜尋腳本
                         </button>
                         <p className="text-[9px] text-neutral-500 italic">
-                          This script scans FB memory for the actual .mp4 HD/SD links.
+                          該腳本會掃描瀏覽器記憶體中真實的高畫質/低畫質 .mp4 連結。
                         </p>
                       </div>
 
                       <div className="space-y-1.5 pt-2 border-t border-white/5">
-                        <p className="text-[11px] font-medium text-red-400">Option D: Network Media (The &quot;All&quot; Tab)</p>
+                        <p className="text-[11px] font-medium text-red-400">方法 D：Network 媒體分頁</p>
                         <ol className="text-[10px] text-neutral-400 list-decimal list-inside space-y-1 leading-normal">
-                          <li>F12 &rarr; Network &rarr; **All** (Don&apos;t use Media)</li>
-                          <li>Search/Filter for: **&quot;_nc_&quot;** or **&quot;mp4&quot;**</li>
-                          <li>Right click &rarr; Copy &rarr; Copy link address</li>
+                          <li>F12 &rarr; Network &rarr; **All** (不要用 Media)</li>
+                          <li>搜尋/篩選關鍵字：**&quot;_nc_&quot;** 或 **&quot;mp4&quot;**</li>
+                          <li>對請求按右鍵 &rarr; Copy &rarr; Copy link address</li>
                         </ol>
                       </div>
 
                       <div className="space-y-1.5 pt-2 border-t border-red-500/20">
-                        <p className="text-[11px] font-medium text-blue-400 font-bold">Option E: The &quot;mbasic&quot; Trick (BEST &amp; FASTEST)</p>
+                        <p className="text-[11px] font-medium text-blue-400 font-bold">方法 E：mbasic 密技 (最推薦/最快)</p>
                         <ol className="text-[10px] text-neutral-400 list-decimal list-inside space-y-1 leading-normal">
-                          <li>Change **www** to **mbasic** in the Facebook URL.</li>
-                          <li>Open that link &rarr; **CLICK** the video play button.</li>
-                          <li>It should open a new page with **JUST** the video.</li>
-                          <li>**If right-click is missing:** Run the **Magic Finder Script** code from Option C on this new page!</li>
+                          <li>將臉書網址中的 **www** 改成 **mbasic**。</li>
+                          <li>打開連結 &rarr; **點擊** 影片播放按鈕。</li>
+                          <li>它會跳轉到一個**只有影片內容**的黑畫面。</li>
+                          <li>對影片按右鍵即可存檔，或在此執行 **神奇搜尋腳本**！</li>
                         </ol>
                       </div>
                     </div>
@@ -360,12 +361,12 @@ export default function Home() {
             {status === "downloading" ? (
               <>
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Downloading...
+                正在下載中...
               </>
             ) : (
               <>
                 <Download className="w-5 h-5" />
-                Download Video
+                開始下載影片
               </>
             )}
           </button>
@@ -383,7 +384,7 @@ export default function Home() {
                 {status === "downloading" && (
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm font-medium mb-1">
-                      <span className="text-neutral-400">Progress</span>
+                      <span className="text-neutral-400">下載進度</span>
                       <span className="text-blue-400">{progress.toFixed(1)}%</span>
                     </div>
                     <div className="h-2 w-full bg-neutral-950 rounded-full overflow-hidden">
@@ -399,7 +400,7 @@ export default function Home() {
                     <div className="mt-4 bg-neutral-950 rounded-lg p-3 text-xs font-mono text-neutral-500 h-24 overflow-y-auto flex flex-col justify-end space-y-1">
                        {logs.length > 0 ? logs.map((log, idx) => (
                            <div key={idx} className="truncate select-none opacity-80">{log}</div>
-                       )) : <div className="animate-pulse">Waiting for yt-dlp...</div>}
+                       )) : <div className="animate-pulse">正在透過 Puppeteer 擷取中...</div>}
                     </div>
                   </div>
                 )}
@@ -412,8 +413,8 @@ export default function Home() {
                   >
                     <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" />
                     <div>
-                      <h4 className="font-medium">Download Complete!</h4>
-                      <p className="text-sm opacity-80 mt-1">Check your 'downloads' folder inside the project directory.</p>
+                      <h4 className="font-medium">下載完成！</h4>
+                      <p className="text-sm opacity-80 mt-1">影片已存入您電腦的「下載 (Downloads)」資料夾。</p>
                     </div>
                   </motion.div>
                 )}
@@ -426,7 +427,7 @@ export default function Home() {
                   >
                     <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                     <div className="overflow-hidden">
-                      <h4 className="font-medium">Download Failed</h4>
+                      <h4 className="font-medium">下載失敗</h4>
                       <p className="text-sm opacity-80 mt-1 truncate" title={errorMsg}>{errorMsg}</p>
                     </div>
                   </motion.div>
