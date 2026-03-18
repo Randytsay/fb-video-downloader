@@ -27,6 +27,72 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [formats, setFormats] = useState<Format[]>([]);
   const [selectedFormat, setSelectedFormat] = useState<Format | null>(null);
+  const [showManual, setShowManual] = useState(false);
+
+  const magicUrlFinderScript = `(function() {
+  const findVideo = () => {
+    const patterns = [
+      /"browser_native_hd_url":"(.*?)"/,
+      /"browser_native_sd_url":"(.*?)"/,
+      /"playable_url":"(.*?)"/,
+      /"playable_url_quality_hd":"(.*?)"/
+    ];
+    let targetUrl = null;
+    const html = document.documentElement.innerHTML;
+    for (const p of patterns) {
+      const match = html.match(p);
+      if (match) {
+        targetUrl = JSON.parse(\`"\${match[1]}"\`);
+        if (targetUrl.startsWith('http')) break;
+      }
+    }
+    if (!targetUrl) {
+      const entries = performance.getEntriesByType("resource");
+      const videoEntry = entries.find(e => (e.name.includes(".mp4") || e.name.includes("video")) && e.name.includes("fbcdn.net"));
+      if (videoEntry) targetUrl = videoEntry.name;
+    }
+    const videoTag = document.querySelector('video');
+    if (videoTag && videoTag.src && videoTag.src.startsWith('http')) targetUrl = videoTag.src;
+    if (!targetUrl) {
+      const links = Array.from(document.querySelectorAll('a'));
+      const videoLink = links.find(a => a.href.includes("video_redirect") || a.href.includes(".mp4"));
+      if (videoLink) targetUrl = videoLink.href;
+    }
+    if (targetUrl) {
+      const el = document.createElement('textarea');
+      el.value = targetUrl;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      alert("成功！已找到影片原始連結。\\n請貼回下載器的網址欄。");
+      return true;
+    }
+    alert("找不到影片連結。\\n提示：在 mbasic 頁面請先「播放」一下影片，等網頁跳轉到只有影片的黑背景頁面後，再執行此腳本。");
+    return false;
+  };
+  findVideo();
+})();`;
+
+  const consoleScript = `(function() {
+  const cookies = document.cookie.split('; ');
+  const netscape = ['# Netscape HTTP Cookie File', '# http://curl.haxx.se/rfc/cookie_spec.html', '# This is a generated file!  Do not edit.', ''];
+  const now = Math.floor(Date.now() / 1000) + 3600*24*365;
+  for (const c of cookies) {
+    const [name, value] = c.split('=');
+    if (name && value) netscape.push(\`.facebook.com\\tTRUE\\t/\\tTRUE\\t\${now}\\t\${name}\\t\${value}\`);
+  }
+  const result = netscape.join('\\n');
+  if (confirm('Cookies 已生成，是否複製到剪貼簿？')) {
+    const el = document.createElement('textarea');
+    el.value = result;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+    alert('已複製到剪貼簿！');
+  }
+})();`;
 
   useEffect(() => {
     setMounted(true);
@@ -311,6 +377,81 @@ export default function Home() {
                 rows={4}
                 className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl px-4 py-3 text-neutral-100 placeholder:text-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all disabled:opacity-50 font-mono text-[11px] resize-none"
               />
+
+              <div className="flex flex-col gap-2">
+                <div className="bg-blue-500/5 border border-blue-500/10 rounded-xl p-3 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <p className="text-[11px] font-medium text-blue-400">無法安裝擴充功能？手動教學：</p>
+                    <button 
+                      onClick={() => setShowManual(!showManual)}
+                      className="text-[10px] text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
+                    >
+                      {showManual ? "隱藏手動導引" : "顯示手動方法"}
+                    </button>
+                  </div>
+                  
+                  <AnimatePresence>
+                    {showManual && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="space-y-4 pt-1 border-t border-white/5 mt-2 overflow-hidden"
+                      >
+                        <div className="space-y-1.5">
+                          <p className="text-[11px] font-medium text-neutral-300">方法 A：瀏覽器控制台 (最快)</p>
+                          <p className="text-[10px] text-neutral-400 leading-normal">
+                            按 F12 &rarr; Console &rarr; 貼上以下代碼並按 Enter。
+                          </p>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(consoleScript);
+                              alert("代碼已複製！請在 Facebook 分頁按 F12 -> Console 貼上並執行。");
+                            }}
+                            className="w-full bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-[10px] py-1.5 rounded-lg border border-blue-500/20 transition-all font-medium"
+                          >
+                            點此複製抓取代碼
+                          </button>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <p className="text-[11px] font-medium text-neutral-300">方法 B：Network 手動複製</p>
+                          <ol className="text-[10px] text-neutral-400 list-decimal list-inside space-y-1">
+                            <li>F12 &rarr; Network &rarr; 重新整理網頁</li>
+                            <li>找 `graphql` 請求 &rarr; 查看 Request Headers</li>
+                            <li>複製 `cookie:` 整段內容並貼到上方框內</li>
+                          </ol>
+                        </div>
+
+                        <div className="space-y-1.5 pt-2 border-t border-white/5">
+                          <p className="text-[11px] font-medium text-green-400">方法 C：魔法影片抓取腳本 (免 Cookie)</p>
+                          <p className="text-[10px] text-neutral-400 leading-normal">
+                            若不想用 Cookies，可點此複製腳本並在影片頁面執行，它會幫你直接抓取 MP4 連結。
+                          </p>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(magicUrlFinderScript);
+                              alert("腳本已複製！請在影片頁面按 F12 -> Console 貼上執行，它會自動複製連結。");
+                            }}
+                            className="w-full bg-green-500/10 hover:bg-green-500/20 text-green-300 text-[10px] py-1.5 rounded-lg border border-green-500/20 transition-all font-medium"
+                          >
+                            點此複製魔法腳本
+                          </button>
+                        </div>
+
+                        <div className="space-y-1.5 pt-2 border-t border-white/5">
+                          <p className="text-[11px] font-medium text-blue-400 font-bold">方法 E：mbasic 密技 (最推薦)</p>
+                          <ol className="text-[10px] text-neutral-400 list-decimal list-inside space-y-1 leading-normal">
+                            <li>將網址的 www 改為 mbasic</li>
+                            <li>點擊影片進入獨立播放頁面</li>
+                            <li>複製該播放頁網址貼回本程式即可下載</li>
+                          </ol>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
             </div>
           </div>
 
